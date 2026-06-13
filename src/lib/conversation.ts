@@ -2,6 +2,8 @@ import { prisma } from "@/lib/prisma";
 import { getWhatsApp, type InboundMessage } from "@/lib/whatsapp";
 import { runReceptionist, type ChatTurn, type ClinicContext } from "@/lib/ai/receptionist";
 import { scheduleFollowUps, cancelFollowUps, scheduleReminders } from "@/lib/scheduling";
+import { clinicCanUseAI } from "@/lib/plan";
+import { parseSlot, isValidFutureSlot } from "@/lib/datetime";
 
 // ----------------------------------------------------------------------------
 // The heart of the product. Handles one inbound WhatsApp message end-to-end:
@@ -10,6 +12,11 @@ import { scheduleFollowUps, cancelFollowUps, scheduleReminders } from "@/lib/sch
 // ----------------------------------------------------------------------------
 
 const MAX_HISTORY = 12; // recent turns sent to the model
+
+// Hard ceiling on AI-generated replies per clinic per rolling 24h. A cost
+// circuit-breaker: even a legitimate-but-runaway loop can't produce an
+// unbounded OpenAI / WhatsApp bill. Tune per plan via AI_DAILY_CAP.
+const AI_DAILY_CAP = Number(process.env.AI_DAILY_CAP ?? 2000);
 
 export async function handleInbound(msg: InboundMessage): Promise<void> {
   // 1. Route to the clinic that owns the destination WhatsApp number.
@@ -62,6 +69,28 @@ export async function handleInbound(msg: InboundMessage): Promise<void> {
   // If a human has taken over, or auto-reply is off, stop here.
   if (conversation.aiPaused || clinic.settings?.autoReply === false) return;
 
+  // Subscription gate: don't run the paid AI for inactive / expired-trial
+  // clinics. The message is still captured above so no lead is lost.
+  if (!clinicCanUseAI(clinic)) {
+    console.warn(`[conversation] clinic ${clinic.id} not on an active plan; skipping AI reply`);
+    return;
+  }
+
+  // Cost circuit-breaker: cap AI replies per clinic per rolling 24h.
+  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const aiRepliesToday = await prisma.message.count({
+    where: {
+      conversation: { clinicId: clinic.id },
+      sender: "AI",
+      direction: "OUTBOUND",
+      createdAt: { gte: since24h },
+    },
+  });
+  if (aiRepliesToday >= AI_DAILY_CAP) {
+    console.error(`[conversation] clinic ${clinic.id} hit AI_DAILY_CAP (${AI_DAILY_CAP}); skipping`);
+    return;
+  }
+
   // 5. Build context + history and run the receptionist.
   const history: ChatTurn[] = [...conversation.messages]
     .reverse()
@@ -80,26 +109,27 @@ export async function handleInbound(msg: InboundMessage): Promise<void> {
     await prisma.lead.update({ where: { id: lead.id }, data: updates });
   }
 
-  // 7. If the AI gathered enough to book, create the appointment.
-  if (result.readyToBook && result.extracted.preferredSlotISO) {
-    const slot = new Date(result.extracted.preferredSlotISO);
-    if (!isNaN(slot.getTime())) {
-      const appt = await prisma.appointment.create({
-        data: {
-          clinicId: clinic.id,
-          leadId: lead.id,
-          patientName: result.extracted.name || lead.name || "Patient",
-          phone: lead.phone,
-          treatment: result.extracted.treatmentInterest || lead.treatmentInterest,
-          scheduledAt: slot,
-          status: "REQUESTED",
-        },
-      });
-      await prisma.lead.update({ where: { id: lead.id }, data: { status: "BOOKED" } });
-      await cancelFollowUps(lead.id);
-      if (clinic.settings?.remindersEnabled !== false) {
-        await scheduleReminders(clinic.id, appt.id, slot);
-      }
+  // 7. If the AI gathered enough to book, create the appointment — but only
+  // after validating the LLM-extracted slot is a sane future datetime. A
+  // hallucinated or injected slot (past date, year 9999) must never become a
+  // real booking with reminders.
+  const slot = parseSlot(result.extracted.preferredSlotISO);
+  if (result.readyToBook && slot && isValidFutureSlot(slot)) {
+    const appt = await prisma.appointment.create({
+      data: {
+        clinicId: clinic.id,
+        leadId: lead.id,
+        patientName: result.extracted.name || lead.name || "Patient",
+        phone: lead.phone,
+        treatment: result.extracted.treatmentInterest || lead.treatmentInterest,
+        scheduledAt: slot,
+        status: "REQUESTED",
+      },
+    });
+    await prisma.lead.update({ where: { id: lead.id }, data: { status: "BOOKED" } });
+    await cancelFollowUps(lead.id);
+    if (clinic.settings?.remindersEnabled !== false) {
+      await scheduleReminders(clinic.id, appt.id, slot);
     }
   } else if (clinic.settings?.followUpsEnabled !== false) {
     // Not booked yet -> make sure follow-ups are scheduled.

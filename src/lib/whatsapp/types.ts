@@ -31,4 +31,10 @@ export interface WhatsAppProvider {
   sendText(msg: OutboundMessage): Promise<SendResult>;
   /** Parse a raw webhook payload into normalised inbound messages. */
   parseInbound(payload: unknown): InboundMessage[];
+  /**
+   * Authenticate an inbound webhook request BEFORE trusting its body.
+   * Receives the exact raw request body (needed for HMAC) and the request
+   * headers. Returns true only if the request provably came from the provider.
+   */
+  verifySignature(rawBody: string, headers: Headers): boolean;
 }

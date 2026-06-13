@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { WhatsAppProvider, OutboundMessage, SendResult, InboundMessage } from "../types";
 
 // WhatsApp Cloud API (Meta) provider.
@@ -7,6 +8,19 @@ export class MetaProvider implements WhatsAppProvider {
 
   private token = process.env.META_WHATSAPP_TOKEN ?? "";
   private phoneNumberId = process.env.META_PHONE_NUMBER_ID ?? "";
+  private appSecret = process.env.META_APP_SECRET ?? "";
+
+  // Meta signs every webhook with HMAC-SHA256 over the raw body using the app
+  // secret, in the `X-Hub-Signature-256: sha256=<hex>` header. We reject any
+  // request that doesn't carry a matching signature.
+  verifySignature(rawBody: string, headers: Headers): boolean {
+    if (!this.appSecret) return false; // fail closed if misconfigured
+    const header = headers.get("x-hub-signature-256") ?? "";
+    const expected = "sha256=" + crypto.createHmac("sha256", this.appSecret).update(rawBody).digest("hex");
+    const a = Buffer.from(header);
+    const b = Buffer.from(expected);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
 
   async sendText(msg: OutboundMessage): Promise<SendResult> {
     try {

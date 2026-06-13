@@ -2,6 +2,11 @@ import { z } from "zod";
 
 // Shared Zod schemas for API input validation.
 
+// E.164 phone format, e.g. +919876543210. Used for WhatsApp routing numbers.
+const e164 = z
+  .string()
+  .regex(/^\+[1-9]\d{7,14}$/, "Must be E.164 format, e.g. +919876543210");
+
 export const signupSchema = z.object({
   clinicName: z.string().min(2).max(120),
   name: z.string().min(1).max(120),
@@ -27,7 +32,15 @@ export const createAppointmentSchema = z.object({
   patientName: z.string().min(1).max(120),
   phone: z.string().min(8).max(20),
   treatment: z.string().max(120).optional(),
-  scheduledAt: z.string().datetime(),
+  scheduledAt: z
+    .string()
+    .datetime()
+    .refine((s) => {
+      const t = new Date(s).getTime();
+      // Not absurdly far in the past/future. Allow a small backdate for
+      // same-day bookings just entered by staff.
+      return t > Date.now() - 60 * 60 * 1000 && t < Date.now() + 365 * 24 * 60 * 60 * 1000;
+    }, "scheduledAt must be a near-future date/time"),
   notes: z.string().max(1000).optional(),
 });
 
@@ -48,5 +61,5 @@ export const settingsSchema = z.object({
   autoReply: z.boolean().optional(),
   followUpsEnabled: z.boolean().optional(),
   remindersEnabled: z.boolean().optional(),
-  whatsappNumber: z.string().max(20).optional(),
+  whatsappNumber: z.union([e164, z.literal("")]).optional(),
 });

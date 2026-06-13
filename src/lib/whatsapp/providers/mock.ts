@@ -6,6 +6,13 @@ import type { WhatsAppProvider, OutboundMessage, SendResult, InboundMessage } fr
 export class MockProvider implements WhatsAppProvider {
   readonly name = "mock";
 
+  // The mock provider has no real signature. To prevent the unauthenticated
+  // injection of messages in production, it is only trusted outside production
+  // unless explicitly allowed via ALLOW_MOCK_WEBHOOK=true (e.g. a sandbox demo).
+  verifySignature(): boolean {
+    return process.env.NODE_ENV !== "production" || process.env.ALLOW_MOCK_WEBHOOK === "true";
+  }
+
   async sendText(msg: OutboundMessage): Promise<SendResult> {
     // eslint-disable-next-line no-console
     console.log(`[whatsapp:mock] -> ${msg.to}: ${msg.body}`);

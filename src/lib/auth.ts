@@ -13,6 +13,7 @@ const SESSION_DAYS = 30;
 function secret() {
   const s = process.env.AUTH_SECRET;
   if (!s) throw new Error("AUTH_SECRET is not set");
+  if (s.length < 32) throw new Error("AUTH_SECRET must be at least 32 characters");
   return new TextEncoder().encode(s);
 }
 

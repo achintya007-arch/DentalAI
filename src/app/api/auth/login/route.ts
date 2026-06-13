@@ -3,15 +3,21 @@ import { verifyPassword, createSession } from "@/lib/auth";
 import { loginSchema } from "@/lib/validation";
 import { ok, fail, handleError } from "@/lib/api";
 
+// A valid bcrypt hash of a random string, used to equalize timing when the
+// supplied email has no account (prevents user enumeration via timing).
+const DUMMY_HASH = "$2a$10$CwTycUXWue0Thq9StjUM0uJ8DvHO0qY3T0bJ4Qn9p1m1Z2eY1q3Aa";
+
 export async function POST(req: Request) {
   try {
     const body = loginSchema.parse(await req.json());
 
     const user = await prisma.user.findUnique({ where: { email: body.email } });
-    if (!user) return fail("Invalid email or password", 401);
 
-    const valid = await verifyPassword(body.password, user.passwordHash);
-    if (!valid) return fail("Invalid email or password", 401);
+    // Always run a bcrypt comparison, even when the user doesn't exist, so the
+    // response time can't be used to enumerate which emails have accounts.
+    const hash = user?.passwordHash ?? DUMMY_HASH;
+    const valid = await verifyPassword(body.password, hash);
+    if (!user || !valid) return fail("Invalid email or password", 401);
 
     await createSession({
       userId: user.id,

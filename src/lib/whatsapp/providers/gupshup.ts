@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { WhatsAppProvider, OutboundMessage, SendResult, InboundMessage } from "../types";
 
 // Gupshup provider — popular India-first WhatsApp BSP.
@@ -8,6 +9,18 @@ export class GupshupProvider implements WhatsAppProvider {
   private apiKey = process.env.GUPSHUP_API_KEY ?? "";
   private appName = process.env.GUPSHUP_APP_NAME ?? "";
   private source = process.env.GUPSHUP_SOURCE_NUMBER ?? "";
+  private webhookSecret = process.env.GUPSHUP_WEBHOOK_SECRET ?? "";
+
+  // Gupshup lets you configure a secret token sent on every inbound callback.
+  // Configure it as a header token and compare in constant time. We fail closed
+  // if no secret is configured so the endpoint is never silently open.
+  verifySignature(_rawBody: string, headers: Headers): boolean {
+    if (!this.webhookSecret) return false;
+    const provided = headers.get("x-gupshup-signature") ?? headers.get("apikey") ?? "";
+    const a = Buffer.from(provided);
+    const b = Buffer.from(this.webhookSecret);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
 
   async sendText(msg: OutboundMessage): Promise<SendResult> {
     try {

@@ -19,14 +19,26 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  const wa = getWhatsApp();
+
+  // Read the RAW body first — HMAC verification must run over the exact bytes
+  // the provider signed, before any JSON parsing.
+  const rawBody = await req.text();
+
+  // Authenticate the request. Without this, anyone could POST fake messages to
+  // create leads, burn OpenAI/WhatsApp spend, or make the clinic's number send
+  // WhatsApp messages to arbitrary phone numbers.
+  if (!wa.verifySignature(rawBody, req.headers)) {
+    return new NextResponse("Invalid signature", { status: 401 });
+  }
+
   let payload: unknown;
   try {
-    payload = await req.json();
+    payload = JSON.parse(rawBody);
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const wa = getWhatsApp();
   const messages = wa.parseInbound(payload);
 
   // Process sequentially; volumes are tiny per clinic. Errors per-message are

@@ -18,6 +18,10 @@ export function handleError(err: unknown) {
   if (err instanceof ZodError) {
     return NextResponse.json({ error: "Invalid input", issues: err.issues }, { status: 422 });
   }
+  // Prisma unique-constraint violation (e.g. duplicate WhatsApp number / email).
+  if (typeof err === "object" && err !== null && (err as { code?: string }).code === "P2002") {
+    return fail("That value is already in use", 409);
+  }
   // eslint-disable-next-line no-console
   console.error("[api] unhandled error", err);
   return fail("Something went wrong", 500);
