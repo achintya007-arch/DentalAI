@@ -1,0 +1,287 @@
+// ============================================================================
+// DentalFlow AI — Prisma Schema
+// Multi-tenant WhatsApp receptionist + booking SaaS for dental clinics.
+// One row in `Clinic` == one paying tenant. Everything is scoped by clinicId.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ----------------------------------------------------------------------------
+// Tenancy & Auth
+// ----------------------------------------------------------------------------
+
+enum UserRole {
+  OWNER
+  RECEPTIONIST
+}
+
+enum PlanTier {
+  TRIAL
+  STARTER
+  PRO
+}
+
+model Clinic {
+  id             String   @id @default(cuid())
+  name           String
+  // The WhatsApp business number patients message (E.164, e.g. +919876543210)
+  whatsappNumber String?  @unique
+  city           String?
+  timezone       String   @default("Asia/Kolkata")
+
+  plan           PlanTier @default(TRIAL)
+  trialEndsAt    DateTime?
+  isActive       Boolean  @default(true)
+
+  // AI receptionist configuration (business hours, FAQs, treatments, tone)
+  settings       ClinicSettings?
+
+  users          User[]
+  leads          Lead[]
+  conversations  Conversation[]
+  appointments   Appointment[]
+  followUps      FollowUp[]
+  reminders      Reminder[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model ClinicSettings {
+  id              String  @id @default(cuid())
+  clinicId        String  @unique
+  clinic          Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  greeting        String  @default("Hi! Thanks for messaging us. How can we help you smile today? 🦷")
+  // Free-text knowledge the AI uses to answer questions
+  aboutClinic     String  @default("")
+  addressText     String  @default("")
+  // JSON: [{ "name": "Teeth Cleaning", "priceFrom": 500 }, ...]
+  treatments      Json    @default("[]")
+  // JSON: [{ "q": "...", "a": "..." }, ...]
+  faqs            Json    @default("[]")
+  // JSON: { "mon": ["10:00","19:00"], ... } 24h local time, null = closed
+  businessHours   Json    @default("{}")
+  // Toggle automations
+  autoReply       Boolean @default(true)
+  followUpsEnabled Boolean @default(true)
+  remindersEnabled Boolean @default(true)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model User {
+  id           String   @id @default(cuid())
+  clinicId     String
+  clinic       Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  email        String   @unique
+  name         String?
+  passwordHash String
+  role         UserRole @default(OWNER)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([clinicId])
+}
+
+// ----------------------------------------------------------------------------
+// Leads / Patients
+// ----------------------------------------------------------------------------
+
+enum LeadStatus {
+  NEW           // just messaged, no info yet
+  ENGAGED       // chatting with AI
+  QUALIFIED     // gave name + treatment interest
+  BOOKED        // converted to an appointment
+  LOST          // went cold after all follow-ups
+}
+
+enum LeadSource {
+  WHATSAPP
+  MANUAL
+  WEBSITE
+}
+
+model Lead {
+  id                String     @id @default(cuid())
+  clinicId          String
+  clinic            Clinic     @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  name              String?
+  phone             String     // E.164
+  treatmentInterest String?
+  status            LeadStatus @default(NEW)
+  source            LeadSource @default(WHATSAPP)
+  notes             String?
+
+  // Follow-up bookkeeping
+  lastContactAt     DateTime?
+  followUpStage     Int        @default(0) // 0=none,1=day1 done,2=day3 done,3=day7 done
+
+  conversation      Conversation?
+  appointments      Appointment[]
+  followUps         FollowUp[]
+
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  // One patient phone per clinic
+  @@unique([clinicId, phone])
+  @@index([clinicId, status])
+}
+
+// ----------------------------------------------------------------------------
+// Conversations & Messages
+// ----------------------------------------------------------------------------
+
+enum MessageDirection {
+  INBOUND   // patient -> clinic
+  OUTBOUND  // clinic/AI -> patient
+}
+
+enum MessageSender {
+  PATIENT
+  AI
+  HUMAN
+  SYSTEM
+}
+
+model Conversation {
+  id         String    @id @default(cuid())
+  clinicId   String
+  clinic     Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  leadId     String    @unique
+  lead       Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  // Pause the AI so a human can take over from the dashboard
+  aiPaused   Boolean   @default(false)
+  messages   Message[]
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([clinicId])
+}
+
+model Message {
+  id             String           @id @default(cuid())
+  conversationId String
+  conversation   Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  direction      MessageDirection
+  sender         MessageSender
+  body           String
+  // Provider message id for idempotency / delivery tracking
+  externalId     String?          @unique
+
+  createdAt      DateTime         @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
+// ----------------------------------------------------------------------------
+// Appointments
+// ----------------------------------------------------------------------------
+
+enum AppointmentStatus {
+  REQUESTED   // AI captured a slot, pending clinic confirmation
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+model Appointment {
+  id          String            @id @default(cuid())
+  clinicId    String
+  clinic      Clinic            @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  leadId      String
+  lead        Lead              @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  patientName String
+  phone       String
+  treatment   String?
+  scheduledAt DateTime
+  status      AppointmentStatus @default(REQUESTED)
+  notes       String?
+
+  reminders   Reminder[]
+
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([clinicId, scheduledAt])
+}
+
+// ----------------------------------------------------------------------------
+// Automations: Follow-ups (un-booked leads) & Reminders (booked appts)
+// ----------------------------------------------------------------------------
+
+enum AutomationStatus {
+  PENDING
+  SENT
+  CANCELLED
+  FAILED
+}
+
+enum FollowUpStage {
+  DAY_1
+  DAY_3
+  DAY_7
+}
+
+model FollowUp {
+  id          String           @id @default(cuid())
+  clinicId    String
+  clinic      Clinic           @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  leadId      String
+  lead        Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  stage       FollowUpStage
+  scheduledFor DateTime
+  status      AutomationStatus @default(PENDING)
+  sentAt      DateTime?
+
+  createdAt   DateTime         @default(now())
+
+  // Don't schedule the same stage twice for a lead
+  @@unique([leadId, stage])
+  @@index([status, scheduledFor])
+}
+
+enum ReminderKind {
+  HOURS_24
+  HOURS_2
+}
+
+model Reminder {
+  id            String           @id @default(cuid())
+  clinicId      String
+  clinic        Clinic           @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+
+  appointmentId String
+  appointment   Appointment      @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  kind          ReminderKind
+  scheduledFor  DateTime
+  status        AutomationStatus @default(PENDING)
+  sentAt        DateTime?
+
+  createdAt     DateTime         @default(now())
+
+  @@unique([appointmentId, kind])
+  @@index([status, scheduledFor])
+}
