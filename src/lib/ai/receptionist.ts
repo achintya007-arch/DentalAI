@@ -64,7 +64,7 @@ function systemPrompt(ctx: ClinicContext): string {
     ``,
     `Respond ONLY as minified JSON matching this TypeScript type:`,
     `{ "reply": string, "extracted": { "name": string|null, "treatmentInterest": string|null, "preferredSlotISO": string|null }, "readyToBook": boolean }`,
-    `Set preferredSlotISO to a full ISO datetime (e.g. "2026-06-15T16:00:00") only when the patient names a concrete day AND time. Set readyToBook to true only when you have BOTH a name and a concrete slot.`,
+    `Set preferredSlotISO to a full ISO datetime in the clinic's LOCAL time with NO timezone offset (e.g. "2026-06-15T16:00:00") only when the patient names a concrete day AND time. Set readyToBook to true only when you have BOTH a name and a concrete slot.`,
   ]
     .filter(Boolean)
     .join("\n");

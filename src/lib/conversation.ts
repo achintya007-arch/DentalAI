@@ -113,7 +113,7 @@ export async function handleInbound(msg: InboundMessage): Promise<void> {
   // after validating the LLM-extracted slot is a sane future datetime. A
   // hallucinated or injected slot (past date, year 9999) must never become a
   // real booking with reminders.
-  const slot = parseSlot(result.extracted.preferredSlotISO);
+  const slot = parseSlot(result.extracted.preferredSlotISO, clinic.timezone);
   if (result.readyToBook && slot && isValidFutureSlot(slot)) {
     const appt = await prisma.appointment.create({
       data: {

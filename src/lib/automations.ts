@@ -39,21 +39,31 @@ export async function processFollowUps(now = new Date()): Promise<number> {
       await prisma.followUp.update({ where: { id: f.id }, data: { status: "CANCELLED" } });
       continue;
     }
+    // Atomically CLAIM this row before sending: only one worker can flip it from
+    // PENDING to SENT. Overlapping cron runs / retries that lose the race get
+    // count 0 and skip, so a patient is never double-messaged.
+    const claim = await prisma.followUp.updateMany({
+      where: { id: f.id, status: "PENDING" },
+      data: { status: "SENT", sentAt: now },
+    });
+    if (claim.count !== 1) continue;
+
     const body = fill(FOLLOWUP_COPY[f.stage], {
       name: f.lead.name ?? "there",
       clinic: f.clinic.name,
       treatment: f.lead.treatmentInterest ?? "treatment",
     });
     const res = await wa.sendText({ to: f.lead.phone, body });
-    await prisma.followUp.update({
-      where: { id: f.id },
-      data: { status: res.ok ? "SENT" : "FAILED", sentAt: res.ok ? now : null },
-    });
+    if (!res.ok) {
+      // Release the claim so it can be retried on a later run.
+      await prisma.followUp.update({ where: { id: f.id }, data: { status: "FAILED", sentAt: null } });
+      continue;
+    }
     // After the last stage with no booking, mark the lead lost.
-    if (res.ok && f.stage === "DAY_7") {
+    if (f.stage === "DAY_7") {
       await prisma.lead.update({ where: { id: f.leadId }, data: { status: "LOST" } });
     }
-    if (res.ok) sent++;
+    sent++;
   }
   return sent;
 }
@@ -74,6 +84,14 @@ export async function processReminders(now = new Date()): Promise<number> {
       await prisma.reminder.update({ where: { id: r.id }, data: { status: "CANCELLED" } });
       continue;
     }
+    // Atomically CLAIM before sending (see processFollowUps for rationale):
+    // prevents the same reminder being sent twice by overlapping runs / retries.
+    const claim = await prisma.reminder.updateMany({
+      where: { id: r.id, status: "PENDING" },
+      data: { status: "SENT", sentAt: now },
+    });
+    if (claim.count !== 1) continue;
+
     const time = r.appointment.scheduledAt.toLocaleString("en-IN", {
       timeZone: r.clinic.timezone,
       day: "numeric",
@@ -88,11 +106,12 @@ export async function processReminders(now = new Date()): Promise<number> {
       time,
     });
     const res = await wa.sendText({ to: r.appointment.phone, body });
-    await prisma.reminder.update({
-      where: { id: r.id },
-      data: { status: res.ok ? "SENT" : "FAILED", sentAt: res.ok ? now : null },
-    });
-    if (res.ok) sent++;
+    if (!res.ok) {
+      // Release the claim so it can be retried on a later run.
+      await prisma.reminder.update({ where: { id: r.id }, data: { status: "FAILED", sentAt: null } });
+      continue;
+    }
+    sent++;
   }
   return sent;
 }
