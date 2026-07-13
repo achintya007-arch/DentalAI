@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { WhatsAppProvider, OutboundMessage, SendResult, InboundMessage } from "../types";
+import type { WhatsAppProvider, OutboundMessage, TemplateMessage, SendResult, InboundMessage } from "../types";
 
 // WhatsApp Cloud API (Meta) provider.
 // Docs: https://developers.facebook.com/docs/whatsapp/cloud-api
@@ -23,6 +23,37 @@ export class MetaProvider implements WhatsAppProvider {
   }
 
   async sendText(msg: OutboundMessage): Promise<SendResult> {
+    return this.post({
+      messaging_product: "whatsapp",
+      to: msg.to.replace("+", ""),
+      type: "text",
+      text: { body: msg.body },
+    });
+  }
+
+  // Template sends are required outside the 24h customer-service window. The
+  // template must be registered & approved in WhatsApp Manager under the same
+  // name (see docs/WHATSAPP_TEMPLATES.md). Language is configurable via
+  // META_TEMPLATE_LANG (default "en").
+  async sendTemplate(msg: TemplateMessage): Promise<SendResult> {
+    return this.post({
+      messaging_product: "whatsapp",
+      to: msg.to.replace("+", ""),
+      type: "template",
+      template: {
+        name: msg.template,
+        language: { code: process.env.META_TEMPLATE_LANG || "en" },
+        components: [
+          {
+            type: "body",
+            parameters: msg.params.map((p) => ({ type: "text", text: p })),
+          },
+        ],
+      },
+    });
+  }
+
+  private async post(payload: unknown): Promise<SendResult> {
     try {
       const res = await fetch(
         `https://graph.facebook.com/v21.0/${this.phoneNumberId}/messages`,
@@ -32,12 +63,7 @@ export class MetaProvider implements WhatsAppProvider {
             Authorization: `Bearer ${this.token}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            messaging_product: "whatsapp",
-            to: msg.to.replace("+", ""),
-            type: "text",
-            text: { body: msg.body },
-          }),
+          body: JSON.stringify(payload),
         }
       );
       const data = (await res.json()) as { messages?: { id: string }[]; error?: { message: string } };

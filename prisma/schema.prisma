@@ -74,6 +74,9 @@ model ClinicSettings {
   followUpsEnabled Boolean @default(true)
   remindersEnabled Boolean @default(true)
 
+  // Owner's personal WhatsApp (E.164) for the Monday revenue report. Empty = off.
+  ownerPhone      String  @default("")
+
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
@@ -123,6 +126,11 @@ model Lead {
   status            LeadStatus @default(NEW)
   source            LeadSource @default(WHATSAPP)
   notes             String?
+
+  // WhatsApp consent. optInAt is stamped on the patient's first inbound
+  // message; optOutAt when they reply STOP. No proactive sends when opted out.
+  optInAt           DateTime?
+  optOutAt          DateTime?
 
   // Follow-up bookkeeping
   lastContactAt     DateTime?
@@ -265,6 +273,17 @@ model FollowUp {
 enum ReminderKind {
   HOURS_24
   HOURS_2
+}
+
+// ----------------------------------------------------------------------------
+// Rate limiting (DB-backed fixed-window buckets; works across serverless
+// instances without an external store)
+// ----------------------------------------------------------------------------
+
+model RateLimitBucket {
+  key         String   @id // e.g. "login:1.2.3.4" or "signup:1.2.3.4"
+  windowStart DateTime
+  count       Int      @default(1)
 }
 
 model Reminder {

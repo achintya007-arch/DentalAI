@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { WhatsAppProvider, OutboundMessage, SendResult, InboundMessage } from "../types";
+import type { WhatsAppProvider, OutboundMessage, TemplateMessage, SendResult, InboundMessage } from "../types";
 
 // Gupshup provider — popular India-first WhatsApp BSP.
 // Docs: https://docs.gupshup.io/docs/whatsapp-api
@@ -41,6 +41,39 @@ export class GupshupProvider implements WhatsAppProvider {
       });
       const data = (await res.json()) as { messageId?: string; message?: string };
       if (!res.ok) return { ok: false, externalId: null, error: data.message ?? "send failed" };
+      return { ok: true, externalId: data.messageId ?? null };
+    } catch (err) {
+      return { ok: false, externalId: null, error: (err as Error).message };
+    }
+  }
+
+  // Gupshup requires the provider-side template ID. Map our internal template
+  // keys to Gupshup IDs via GUPSHUP_TEMPLATE_IDS, a JSON object like:
+  //   {"followup_day1":"<uuid>", "reminder_24h":"<uuid>", ...}
+  async sendTemplate(msg: TemplateMessage): Promise<SendResult> {
+    try {
+      const ids = JSON.parse(process.env.GUPSHUP_TEMPLATE_IDS || "{}") as Record<string, string>;
+      const templateId = ids[msg.template];
+      if (!templateId) {
+        return { ok: false, externalId: null, error: `no Gupshup template id configured for "${msg.template}"` };
+      }
+      const form = new URLSearchParams({
+        channel: "whatsapp",
+        source: this.source,
+        destination: msg.to.replace("+", ""),
+        "src.name": this.appName,
+        template: JSON.stringify({ id: templateId, params: msg.params }),
+      });
+      const res = await fetch("https://api.gupshup.io/wa/api/v1/template/msg", {
+        method: "POST",
+        headers: {
+          apikey: this.apiKey,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: form.toString(),
+      });
+      const data = (await res.json()) as { messageId?: string; message?: string };
+      if (!res.ok) return { ok: false, externalId: null, error: data.message ?? "template send failed" };
       return { ok: true, externalId: data.messageId ?? null };
     } catch (err) {
       return { ok: false, externalId: null, error: (err as Error).message };

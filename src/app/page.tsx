@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { RoiCalculator } from "@/components/RoiCalculator";
 
 const features = [
   {
@@ -49,15 +50,15 @@ export default function LandingPage() {
 
       {/* Hero */}
       <section className="mx-auto max-w-6xl px-6 pb-16 pt-10 text-center">
-        <span className="badge bg-brand-100 text-brand-700">Built for Indian dental clinics 🇮🇳</span>
+        <span className="badge bg-brand-100 text-brand-700">The Missed-Patient Recovery System 🇮🇳</span>
         <h1 className="mx-auto mt-5 max-w-3xl text-4xl font-extrabold leading-tight sm:text-5xl">
-          Your clinic&apos;s WhatsApp, answered{" "}
-          <span className="text-brand-600">instantly</span> — even at 2 AM.
+          Stop losing patients on WhatsApp.{" "}
+          <span className="text-brand-600">Recover them automatically.</span>
         </h1>
         <p className="mx-auto mt-5 max-w-2xl text-lg text-slate-600">
-          DentalFlow AI is an AI receptionist that replies to every WhatsApp inquiry, books
-          appointments, sends reminders and follows up with patients — so you stop losing revenue to
-          missed messages.
+          Clinics miss 30–40% of WhatsApp inquiries after hours. DentalFlow AI answers every message
+          in seconds, books the appointment, reminds the patient, and follows up with everyone who
+          didn&apos;t book — then shows you the recovered revenue every Monday.
         </p>
         <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
           <Link href="/signup" className="btn-primary px-6 py-3 text-base">
@@ -89,7 +90,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Problem */}
+      {/* Problem + ROI calculator */}
       <section className="bg-slate-50 py-16">
         <div className="mx-auto max-w-4xl px-6 text-center">
           <h2 className="text-2xl font-bold sm:text-3xl">Every missed WhatsApp is lost revenue</h2>
@@ -105,7 +106,23 @@ export default function LandingPage() {
               </div>
             ))}
           </div>
+          <div className="mt-10">
+            <RoiCalculator />
+          </div>
         </div>
+      </section>
+
+      {/* Receptionist-hero */}
+      <section className="mx-auto max-w-4xl px-6 py-16 text-center">
+        <h2 className="text-2xl font-bold sm:text-3xl">
+          Not a replacement for your receptionist. <span className="text-brand-600">A superpower for her.</span>
+        </h2>
+        <p className="mx-auto mt-4 max-w-2xl text-slate-600">
+          DentalFlow handles the 9 PM &ldquo;how much for cleaning?&rdquo; messages, the repeat questions, and the
+          follow-ups nobody has time for — so your front desk can focus on the patients in the chair.
+          Your team can take over any conversation with one click, and every chat stays visible in one
+          dashboard.
+        </p>
       </section>
 
       {/* Features */}
@@ -147,22 +164,37 @@ export default function LandingPage() {
       {/* Pricing */}
       <section className="mx-auto max-w-5xl px-6 py-16">
         <h2 className="text-center text-2xl font-bold sm:text-3xl">Simple pricing for clinics</h2>
-        <p className="mt-2 text-center text-slate-600">Less than the cost of one missed patient a month.</p>
+        <p className="mt-2 text-center text-slate-600">
+          One recovered patient pays for the whole year. We set everything up for you, free.
+        </p>
         <div className="mt-10 grid gap-6 sm:grid-cols-2">
           <PricingCard
             name="Starter"
-            price="₹1,499"
+            price="₹2,499"
             period="/month"
-            tagline="For solo & small clinics"
-            features={["AI WhatsApp receptionist", "Unlimited inquiries", "Auto booking & reminders", "Day 1/3/7 follow-ups", "1 WhatsApp number"]}
+            tagline="₹1,499/mo when billed annually"
+            highlight
+            features={[
+              "24×7 AI WhatsApp receptionist",
+              "Unlimited inquiries & bookings",
+              "24h & 2h appointment reminders",
+              "Day 1/3/7 follow-ups for un-booked leads",
+              "Monday recovered-revenue report",
+              "Free white-glove setup",
+            ]}
           />
           <PricingCard
             name="Pro"
-            price="₹3,499"
+            price="₹4,999"
             period="/month"
             tagline="For busy multi-dentist clinics"
-            highlight
-            features={["Everything in Starter", "Up to 3 WhatsApp numbers", "Multiple receptionist logins", "Priority support", "Custom AI training"]}
+            features={[
+              "Everything in Starter",
+              "Up to 3 WhatsApp numbers",
+              "Multiple receptionist logins",
+              "Priority support on WhatsApp",
+              "Custom AI training for your clinic",
+            ]}
           />
         </div>
       </section>

@@ -92,10 +92,17 @@ export default function LeadsPage() {
 
 function LeadDrawer({ leadId, onClose, onChange }: { leadId: string; onClose: () => void; onChange: () => void }) {
   const [lead, setLead] = useState<any>(null);
+  const [reply, setReply] = useState("");
+  const [replyError, setReplyError] = useState("");
+  const [sending, setSending] = useState(false);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     fetch(`/api/leads/${leadId}`).then((r) => r.json()).then((d) => setLead(d.data));
   }, [leadId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   async function setStatus(status: LeadStatus) {
     await fetch(`/api/leads/${leadId}`, {
@@ -105,6 +112,36 @@ function LeadDrawer({ leadId, onClose, onChange }: { leadId: string; onClose: ()
     });
     onChange();
     setLead((l: any) => ({ ...l, status }));
+  }
+
+  async function toggleAi() {
+    const paused = !lead?.conversation?.aiPaused;
+    await fetch(`/api/leads/${leadId}/ai`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paused }),
+    });
+    setLead((l: any) => ({ ...l, conversation: { ...l.conversation, aiPaused: paused } }));
+  }
+
+  async function sendReply(e: React.FormEvent) {
+    e.preventDefault();
+    if (!reply.trim()) return;
+    setSending(true);
+    setReplyError("");
+    const res = await fetch(`/api/leads/${leadId}/reply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: reply }),
+    });
+    setSending(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setReplyError(data.error ?? "Could not send");
+      return;
+    }
+    setReply("");
+    load();
   }
 
   return (
@@ -134,7 +171,17 @@ function LeadDrawer({ leadId, onClose, onChange }: { leadId: string; onClose: ()
               <p className="mt-4 text-sm"><span className="text-slate-500">Interested in:</span> {lead.treatmentInterest}</p>
             )}
 
-            <h3 className="mt-6 mb-2 text-sm font-semibold text-slate-700">Conversation</h3>
+            <div className="mt-6 mb-2 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-700">Conversation</h3>
+              {lead.conversation && (
+                <button
+                  onClick={toggleAi}
+                  className={`badge ${lead.conversation.aiPaused ? "bg-amber-100 text-amber-700" : "bg-brand-100 text-brand-700"}`}
+                >
+                  {lead.conversation.aiPaused ? "AI paused — you're replying" : "AI active · click to take over"}
+                </button>
+              )}
+            </div>
             <div className="space-y-2 rounded-lg bg-slate-50 p-3">
               {lead.conversation?.messages?.length ? (
                 lead.conversation.messages.map((m: any) => (
@@ -148,6 +195,22 @@ function LeadDrawer({ leadId, onClose, onChange }: { leadId: string; onClose: ()
                 <p className="text-sm text-slate-400">No messages yet.</p>
               )}
             </div>
+            {lead.conversation && (
+              <form onSubmit={sendReply} className="mt-3">
+                <div className="flex gap-2">
+                  <input
+                    className="input"
+                    placeholder="Reply as clinic staff…"
+                    value={reply}
+                    onChange={(e) => setReply(e.target.value)}
+                  />
+                  <button className="btn-primary" disabled={sending}>
+                    {sending ? "…" : "Send"}
+                  </button>
+                </div>
+                {replyError && <p className="mt-2 text-xs text-red-600">{replyError}</p>}
+              </form>
+            )}
           </>
         )}
       </div>

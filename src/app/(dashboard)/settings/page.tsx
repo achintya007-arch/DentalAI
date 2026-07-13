@@ -10,6 +10,7 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
   const [whatsappNumber, setWhatsappNumber] = useState("");
+  const [ownerPhone, setOwnerPhone] = useState("");
   const [greeting, setGreeting] = useState("");
   const [aboutClinic, setAboutClinic] = useState("");
   const [addressText, setAddressText] = useState("");
@@ -27,6 +28,7 @@ export default function SettingsPage() {
         setWhatsappNumber(data.whatsappNumber ?? "");
         const s = data.settings;
         if (s) {
+          setOwnerPhone(s.ownerPhone ?? "");
           setGreeting(s.greeting ?? "");
           setAboutClinic(s.aboutClinic ?? "");
           setAddressText(s.addressText ?? "");
@@ -47,6 +49,7 @@ export default function SettingsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         whatsappNumber,
+        ownerPhone,
         greeting,
         aboutClinic,
         addressText,
@@ -80,6 +83,11 @@ export default function SettingsPage() {
         <label className="label">Business number (E.164, e.g. +919876543210)</label>
         <input className="input" value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value)} placeholder="+919876543210" />
         <p className="mt-2 text-xs text-slate-500">This is the number patients message. It routes inbound chats to your clinic.</p>
+        <div className="mt-4">
+          <label className="label">Owner&apos;s WhatsApp (for your Monday report)</label>
+          <input className="input" value={ownerPhone} onChange={(e) => setOwnerPhone(e.target.value)} placeholder="+919812345678" />
+          <p className="mt-2 text-xs text-slate-500">Every Monday morning we send you last week&apos;s inquiries, bookings and upcoming appointments. Leave empty to turn off.</p>
+        </div>
       </section>
 
       <section className="card mb-6">

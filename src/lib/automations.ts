@@ -1,27 +1,31 @@
 import { prisma } from "@/lib/prisma";
 import { getWhatsApp } from "@/lib/whatsapp";
+import { render, type TemplateKey } from "@/lib/whatsapp/templates";
 import type { FollowUpStage, ReminderKind } from "@prisma/client";
 
 // ----------------------------------------------------------------------------
-// Cron-driven processors. Called every ~15 min by /api/cron/*. Each picks up
-// PENDING rows that are now due, sends a WhatsApp message, and marks them SENT.
-// Idempotent: a row is flipped to SENT before/at send so retries don't dupe.
+// Cron-driven processors. Called by /api/cron/*. Each picks up PENDING rows
+// that are now due, sends a WhatsApp message, and marks them SENT.
+//
+// Compliance: scheduled sends are business-initiated and can never assume the
+// 24h customer-service window is open, so they ALWAYS use pre-approved
+// templates (sendTemplate), never free-form text. Leads that opted out (STOP)
+// are skipped and their automations cancelled.
+//
+// Concurrency: each row is atomically CLAIMED (conditional PENDING->SENT
+// update) before sending, so overlapping runs / retries can't double-message.
 // ----------------------------------------------------------------------------
 
-const FOLLOWUP_COPY: Record<FollowUpStage, string> = {
-  DAY_1: "Hi {name}! Just checking in 🙂 Would you like to book your dental visit at {clinic}? Reply with a day & time that suits you.",
-  DAY_3: "Hello {name}, still keen on your {treatment}? We have slots opening up this week at {clinic}. Want me to book one for you?",
-  DAY_7: "Hi {name}, last reminder from {clinic} 🦷 — your smile matters! Reply anytime and I'll help you book. Wishing you good health!",
+const FOLLOWUP_TEMPLATE: Record<FollowUpStage, TemplateKey> = {
+  DAY_1: "followup_day1",
+  DAY_3: "followup_day3",
+  DAY_7: "followup_day7",
 };
 
-const REMINDER_COPY: Record<ReminderKind, string> = {
-  HOURS_24: "Reminder: you have a dental appointment at {clinic} tomorrow ({time}). Reply CONFIRM to keep it or RESCHEDULE to change. See you! 🦷",
-  HOURS_2: "Hi {name}! Your appointment at {clinic} is in ~2 hours ({time}). We look forward to seeing you 😊",
+const REMINDER_TEMPLATE: Record<ReminderKind, TemplateKey> = {
+  HOURS_24: "reminder_24h",
+  HOURS_2: "reminder_2h",
 };
-
-function fill(template: string, vars: Record<string, string>): string {
-  return template.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? "");
-}
 
 export async function processFollowUps(now = new Date()): Promise<number> {
   const due = await prisma.followUp.findMany({
@@ -34,32 +38,35 @@ export async function processFollowUps(now = new Date()): Promise<number> {
   let sent = 0;
 
   for (const f of due) {
-    // Lead already booked? Cancel instead of sending.
-    if (f.lead.status === "BOOKED" || f.lead.status === "LOST") {
+    // Booked, lost, or opted out? Cancel instead of sending.
+    if (f.lead.status === "BOOKED" || f.lead.status === "LOST" || f.lead.optOutAt) {
       await prisma.followUp.update({ where: { id: f.id }, data: { status: "CANCELLED" } });
       continue;
     }
-    // Atomically CLAIM this row before sending: only one worker can flip it from
-    // PENDING to SENT. Overlapping cron runs / retries that lose the race get
-    // count 0 and skip, so a patient is never double-messaged.
+    // Atomically claim: only one worker can flip PENDING -> SENT.
     const claim = await prisma.followUp.updateMany({
       where: { id: f.id, status: "PENDING" },
       data: { status: "SENT", sentAt: now },
     });
     if (claim.count !== 1) continue;
 
-    const body = fill(FOLLOWUP_COPY[f.stage], {
-      name: f.lead.name ?? "there",
-      clinic: f.clinic.name,
-      treatment: f.lead.treatmentInterest ?? "treatment",
+    const template = FOLLOWUP_TEMPLATE[f.stage];
+    const params =
+      f.stage === "DAY_3"
+        ? [f.lead.name ?? "there", f.lead.treatmentInterest ?? "your treatment", f.clinic.name]
+        : [f.lead.name ?? "there", f.clinic.name];
+
+    const res = await wa.sendTemplate({
+      to: f.lead.phone,
+      template,
+      params,
+      bodyPreview: render(template, params),
     });
-    const res = await wa.sendText({ to: f.lead.phone, body });
     if (!res.ok) {
-      // Release the claim so it can be retried on a later run.
+      // Release the claim so a later run can retry.
       await prisma.followUp.update({ where: { id: f.id }, data: { status: "FAILED", sentAt: null } });
       continue;
     }
-    // After the last stage with no booking, mark the lead lost.
     if (f.stage === "DAY_7") {
       await prisma.lead.update({ where: { id: f.leadId }, data: { status: "LOST" } });
     }
@@ -71,7 +78,7 @@ export async function processFollowUps(now = new Date()): Promise<number> {
 export async function processReminders(now = new Date()): Promise<number> {
   const due = await prisma.reminder.findMany({
     where: { status: "PENDING", scheduledFor: { lte: now } },
-    include: { appointment: true, clinic: true },
+    include: { appointment: { include: { lead: true } }, clinic: true },
     take: 100,
   });
 
@@ -79,13 +86,15 @@ export async function processReminders(now = new Date()): Promise<number> {
   let sent = 0;
 
   for (const r of due) {
-    // Don't remind for cancelled/no-show appointments.
-    if (["CANCELLED", "NO_SHOW", "COMPLETED"].includes(r.appointment.status)) {
+    // Cancelled/finished appointment, or patient opted out? Cancel the reminder.
+    if (
+      ["CANCELLED", "NO_SHOW", "COMPLETED"].includes(r.appointment.status) ||
+      r.appointment.lead.optOutAt
+    ) {
       await prisma.reminder.update({ where: { id: r.id }, data: { status: "CANCELLED" } });
       continue;
     }
-    // Atomically CLAIM before sending (see processFollowUps for rationale):
-    // prevents the same reminder being sent twice by overlapping runs / retries.
+    // Atomically claim before sending.
     const claim = await prisma.reminder.updateMany({
       where: { id: r.id, status: "PENDING" },
       data: { status: "SENT", sentAt: now },
@@ -100,18 +109,65 @@ export async function processReminders(now = new Date()): Promise<number> {
       minute: "2-digit",
       hour12: true,
     });
-    const body = fill(REMINDER_COPY[r.kind], {
-      name: r.appointment.patientName,
-      clinic: r.clinic.name,
-      time,
+    const template = REMINDER_TEMPLATE[r.kind];
+    const params = [r.appointment.patientName, r.clinic.name, time];
+
+    const res = await wa.sendTemplate({
+      to: r.appointment.phone,
+      template,
+      params,
+      bodyPreview: render(template, params),
     });
-    const res = await wa.sendText({ to: r.appointment.phone, body });
     if (!res.ok) {
-      // Release the claim so it can be retried on a later run.
       await prisma.reminder.update({ where: { id: r.id }, data: { status: "FAILED", sentAt: null } });
       continue;
     }
     sent++;
+  }
+  return sent;
+}
+
+// ----------------------------------------------------------------------------
+// Monday owner report — the retention hook. Sends each active clinic's last-7-
+// day numbers to the owner's WhatsApp (ClinicSettings.ownerPhone, opt-in by
+// virtue of being configured by the owner themself).
+// ----------------------------------------------------------------------------
+
+export async function processWeeklyReports(now = new Date()): Promise<number> {
+  const clinics = await prisma.clinic.findMany({
+    where: { isActive: true, settings: { isNot: null } },
+    include: { settings: true },
+  });
+
+  const wa = getWhatsApp();
+  const since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const weekAhead = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  let sent = 0;
+
+  for (const clinic of clinics) {
+    const ownerPhone = clinic.settings?.ownerPhone;
+    if (!ownerPhone) continue;
+
+    const [inquiries, booked, upcoming] = await Promise.all([
+      prisma.lead.count({ where: { clinicId: clinic.id, createdAt: { gte: since } } }),
+      prisma.appointment.count({ where: { clinicId: clinic.id, createdAt: { gte: since } } }),
+      prisma.appointment.count({
+        where: {
+          clinicId: clinic.id,
+          scheduledAt: { gte: now, lte: weekAhead },
+          status: { in: ["REQUESTED", "CONFIRMED"] },
+        },
+      }),
+    ]);
+
+    const params = [clinic.name, String(inquiries), String(booked), String(upcoming)];
+    const res = await wa.sendTemplate({
+      to: ownerPhone,
+      template: "weekly_report",
+      params,
+      bodyPreview: render("weekly_report", params),
+    });
+    if (res.ok) sent++;
   }
   return sent;
 }

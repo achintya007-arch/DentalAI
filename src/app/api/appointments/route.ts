@@ -5,6 +5,8 @@ import { requireSession } from "@/lib/auth";
 import { createAppointmentSchema } from "@/lib/validation";
 import { ok, handleError } from "@/lib/api";
 import { scheduleReminders, cancelFollowUps } from "@/lib/scheduling";
+import { hasConflict } from "@/lib/booking";
+import { fail } from "@/lib/api";
 
 // GET /api/appointments?from=ISO&to=ISO  -> list appointments
 export async function GET(req: Request) {
@@ -35,6 +37,11 @@ export async function POST(req: Request) {
   try {
     const session = await requireSession();
     const body = createAppointmentSchema.parse(await req.json());
+
+    // Double-booking guard: reject slots within ±30 min of an active booking.
+    if (await hasConflict(session.clinicId, new Date(body.scheduledAt))) {
+      return fail("This slot conflicts with another appointment within 30 minutes", 409);
+    }
 
     // Find or create the lead for this phone.
     const lead = await prisma.lead.upsert({

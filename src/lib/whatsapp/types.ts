@@ -11,6 +11,21 @@ export type OutboundMessage = {
   body: string;
 };
 
+/**
+ * A pre-approved template send. Required for any business-initiated message
+ * outside WhatsApp's 24-hour customer-service window (all scheduled follow-ups
+ * and reminders). `template` is our internal template key (see lib/templates);
+ * providers map it to their registered template name/id. `params` fill the
+ * template's {{1}}..{{n}} placeholders in order. `bodyPreview` is the rendered
+ * text we store in the conversation and what the mock provider prints.
+ */
+export type TemplateMessage = {
+  to: string;
+  template: string;
+  params: string[];
+  bodyPreview: string;
+};
+
 export type SendResult = {
   externalId: string | null;
   ok: boolean;
@@ -28,7 +43,10 @@ export type InboundMessage = {
 
 export interface WhatsAppProvider {
   readonly name: string;
+  /** Free-form text. ONLY valid inside the 24h customer-service window. */
   sendText(msg: OutboundMessage): Promise<SendResult>;
+  /** Pre-approved template message. Safe outside the 24h window. */
+  sendTemplate(msg: TemplateMessage): Promise<SendResult>;
   /** Parse a raw webhook payload into normalised inbound messages. */
   parseInbound(payload: unknown): InboundMessage[];
   /**

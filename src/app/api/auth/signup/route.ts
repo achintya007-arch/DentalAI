@@ -2,12 +2,19 @@ import { prisma } from "@/lib/prisma";
 import { hashPassword, createSession } from "@/lib/auth";
 import { signupSchema } from "@/lib/validation";
 import { ok, fail, handleError } from "@/lib/api";
+import { checkRateLimit, clientIp } from "@/lib/ratelimit";
 
 const TRIAL_DAYS = 14;
 
 export async function POST(req: Request) {
   try {
     const body = signupSchema.parse(await req.json());
+
+    // Trial-farming protection: max 5 signups per IP per hour.
+    const limit = await checkRateLimit(`signup:ip:${clientIp(req)}`, 5, 60 * 60 * 1000);
+    if (!limit.allowed) {
+      return fail("Too many signups from this network. Try again later.", 429);
+    }
 
     const existing = await prisma.user.findUnique({ where: { email: body.email } });
     if (existing) return fail("An account with this email already exists", 409);

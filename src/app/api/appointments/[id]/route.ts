@@ -3,6 +3,7 @@ import { requireSession } from "@/lib/auth";
 import { updateAppointmentSchema } from "@/lib/validation";
 import { ok, fail, handleError } from "@/lib/api";
 import { scheduleReminders, cancelReminders } from "@/lib/scheduling";
+import { hasConflict } from "@/lib/booking";
 
 // PATCH /api/appointments/:id  -> update status / reschedule
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
@@ -14,6 +15,11 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       where: { id: params.id, clinicId: session.clinicId },
     });
     if (!existing) return fail("Appointment not found", 404);
+
+    // Double-booking guard on reschedule (exclude this appointment itself).
+    if (body.scheduledAt && (await hasConflict(session.clinicId, new Date(body.scheduledAt), params.id))) {
+      return fail("This slot conflicts with another appointment within 30 minutes", 409);
+    }
 
     const updated = await prisma.appointment.update({
       where: { id: params.id },

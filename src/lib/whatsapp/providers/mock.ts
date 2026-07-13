@@ -1,4 +1,4 @@
-import type { WhatsAppProvider, OutboundMessage, SendResult, InboundMessage } from "../types";
+import type { WhatsAppProvider, OutboundMessage, TemplateMessage, SendResult, InboundMessage } from "../types";
 
 // Local-dev provider. Logs outbound messages to the console instead of calling
 // a real API, and accepts a simple JSON inbound shape so you can simulate
@@ -17,6 +17,12 @@ export class MockProvider implements WhatsAppProvider {
     // eslint-disable-next-line no-console
     console.log(`[whatsapp:mock] -> ${msg.to}: ${msg.body}`);
     return { ok: true, externalId: `mock_${Date.now()}` };
+  }
+
+  async sendTemplate(msg: TemplateMessage): Promise<SendResult> {
+    // eslint-disable-next-line no-console
+    console.log(`[whatsapp:mock] -> ${msg.to} [template:${msg.template}]: ${msg.bodyPreview}`);
+    return { ok: true, externalId: `mock_tpl_${Date.now()}` };
   }
 
   parseInbound(payload: unknown): InboundMessage[] {

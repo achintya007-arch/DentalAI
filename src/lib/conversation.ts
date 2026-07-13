@@ -4,6 +4,8 @@ import { runReceptionist, type ChatTurn, type ClinicContext } from "@/lib/ai/rec
 import { scheduleFollowUps, cancelFollowUps, scheduleReminders } from "@/lib/scheduling";
 import { clinicCanUseAI } from "@/lib/plan";
 import { parseSlot, isValidFutureSlot } from "@/lib/datetime";
+import { isStopMessage, isStartMessage } from "@/lib/whatsapp/window";
+import { hasConflict } from "@/lib/booking";
 
 // ----------------------------------------------------------------------------
 // The heart of the product. Handles one inbound WhatsApp message end-to-end:
@@ -66,6 +68,39 @@ export async function handleInbound(msg: InboundMessage): Promise<void> {
     },
   });
 
+  // Consent bookkeeping: first inbound message = opt-in (WhatsApp treats a
+  // user-initiated message as consent to reply). Never overwrite the original
+  // opt-in timestamp.
+  if (!lead.optInAt) {
+    await prisma.lead.update({ where: { id: lead.id }, data: { optInAt: new Date() } });
+  }
+
+  // STOP / START — must be honoured before anything else, including AI replies.
+  if (isStopMessage(msg.body)) {
+    await prisma.lead.update({ where: { id: lead.id }, data: { optOutAt: new Date() } });
+    await cancelFollowUps(lead.id);
+    const wa = getWhatsApp();
+    const confirmation = "You won't receive any more messages from us. Reply START anytime to resume. Take care! 🙏";
+    const res = await wa.sendText({ to: msg.from, body: confirmation });
+    await prisma.message.create({
+      data: {
+        conversationId: conversation.id,
+        direction: "OUTBOUND",
+        sender: "SYSTEM",
+        body: confirmation,
+        externalId: res.externalId,
+      },
+    });
+    return;
+  }
+  if (isStartMessage(msg.body) && lead.optOutAt) {
+    await prisma.lead.update({ where: { id: lead.id }, data: { optOutAt: null } });
+    // fall through — the AI can greet them again below
+  } else if (lead.optOutAt) {
+    // Opted out: store the message for the clinic to see, but send nothing.
+    return;
+  }
+
   // If a human has taken over, or auto-reply is off, stop here.
   if (conversation.aiPaused || clinic.settings?.autoReply === false) return;
 
@@ -114,7 +149,24 @@ export async function handleInbound(msg: InboundMessage): Promise<void> {
   // hallucinated or injected slot (past date, year 9999) must never become a
   // real booking with reminders.
   const slot = parseSlot(result.extracted.preferredSlotISO, clinic.timezone);
-  if (result.readyToBook && slot && isValidFutureSlot(slot)) {
+  const conflict = result.readyToBook && slot ? await hasConflict(clinic.id, slot) : false;
+
+  if (conflict && slot) {
+    // Don't create a colliding appointment; ask for another time instead of
+    // sending the AI's "booked!" reply.
+    const slotText = slot.toLocaleString("en-IN", {
+      timeZone: clinic.timezone,
+      day: "numeric",
+      month: "short",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+    result.reply = `So sorry — ${slotText} just got taken 🙏 Could you share another time that works? Our team will make sure you get a slot.`;
+    if (clinic.settings?.followUpsEnabled !== false) {
+      await scheduleFollowUps(clinic.id, lead.id);
+    }
+  } else if (result.readyToBook && slot && isValidFutureSlot(slot)) {
     const appt = await prisma.appointment.create({
       data: {
         clinicId: clinic.id,

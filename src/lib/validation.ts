@@ -62,4 +62,5 @@ export const settingsSchema = z.object({
   followUpsEnabled: z.boolean().optional(),
   remindersEnabled: z.boolean().optional(),
   whatsappNumber: z.union([e164, z.literal("")]).optional(),
+  ownerPhone: z.union([e164, z.literal("")]).optional(),
 });
